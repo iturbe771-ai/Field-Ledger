@@ -85,13 +85,16 @@
   .log-loc { font-size:12px; color:var(--muted); font-family:'IBM Plex Mono',monospace; margin-left:8px; overflow-wrap:anywhere; }
   .log-text { font-size:14px; color:var(--paper); margin-top:4px; overflow-wrap:anywhere; word-break:break-word; }
 
-  .photo-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .photo-row { display:flex; flex-direction:column; gap:8px; }
+  .photo-row-top { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
   .photo-btn { font-size:12px; padding:8px 12px; border:1px solid var(--teal); background:white; color:var(--ink); cursor:pointer; font-family:'IBM Plex Mono',monospace; }
-  .photo-preview { position:relative; display:inline-block; }
-  .photo-preview img { max-width:96px; max-height:96px; display:block; border:1px solid var(--brass); object-fit:cover; }
+  .photo-count-note { font-size:11px; color:#6B5F45; font-family:'IBM Plex Mono',monospace; }
+  .photo-thumbs { display:flex; gap:8px; flex-wrap:wrap; }
+  .photo-thumb { position:relative; display:inline-block; }
+  .photo-thumb img { width:72px; height:72px; display:block; border:1px solid var(--brass); object-fit:cover; }
   .photo-remove { position:absolute; top:-8px; right:-8px; width:22px; height:22px; border-radius:50%; background:var(--rust); color:white; border:none; cursor:pointer; font-size:12px; line-height:1; }
-  .log-photo { max-width:100%; max-height:220px; display:block; margin-top:8px; border:1px solid var(--line); cursor:pointer; object-fit:cover; }
-  .photo-uploading { font-size:11px; color:var(--muted); font-family:'IBM Plex Mono',monospace; }
+  .log-photo-gallery { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+  .log-photo { width:84px; height:84px; display:block; border:1px solid var(--line); cursor:pointer; object-fit:cover; }
 
   .footer-note { margin-top:40px; text-align:center; font-size:10px; color:#4A544D; font-family:'IBM Plex Mono',monospace; }
 
@@ -192,12 +195,12 @@
         <div class="tag-row" id="tagRow"></div>
         <textarea id="lText" rows="3" placeholder="What was different today"></textarea>
         <div class="photo-row">
-          <input type="file" accept="image/*" id="lPhotoInput" style="display:none" onchange="handlePhotoSelect(event)">
-          <button type="button" class="photo-btn" id="photoAddBtn" onclick="document.getElementById('lPhotoInput').click()">+ Add photo</button>
-          <div class="photo-preview" id="photoPreviewWrap" style="display:none">
-            <img id="photoPreviewImg" alt="">
-            <button type="button" class="photo-remove" onclick="removePhoto()">✕</button>
+          <div class="photo-row-top">
+            <input type="file" accept="image/*" id="lPhotoInput" style="display:none" multiple onchange="handlePhotoSelect(event)">
+            <button type="button" class="photo-btn" id="photoAddBtn" onclick="document.getElementById('lPhotoInput').click()">+ Add photos</button>
+            <span class="photo-count-note" id="photoCountNote"></span>
           </div>
+          <div class="photo-thumbs" id="photoThumbs"></div>
         </div>
         <div class="form-error" id="logFormError"></div>
         <button class="save-btn" id="logSaveBtn" onclick="saveLog()">Save entry</button>
@@ -227,10 +230,11 @@ let authMode = "signin";
 let tab = "people";
 let editingPersonId = null;
 let editingLogId = null;
-let pendingPhotoBlob = null;
-let pendingPhotoRemoved = false;
-let existingPhotoPath = null;
-let photoPreviewObjectUrl = null;
+const MAX_PHOTOS = 5;
+let existingPhotos = [];          // photo paths already saved on the entry being edited
+let removedExistingPhotos = [];   // subset of existingPhotos removed this session (deleted from storage only after a successful save)
+let newPhotos = [];                // [{ blob, previewUrl, uploadedPath }] — newly picked, not yet (or just) uploaded
+let existingPhotoUrlMap = {};      // path -> signed url, for the entry currently being edited
 const photoUrlCache = {};
 
 function uid() { return Math.random().toString(36).slice(2, 10); }
@@ -402,47 +406,80 @@ async function getPhotoUrl(path) {
   return signed.signedUrl;
 }
 
-async function handlePhotoSelect(event) {
-  const file = event.target.files && event.target.files[0];
-  event.target.value = "";
-  if (!file) return;
-  document.getElementById("logFormError").textContent = "";
-  try {
-    const blob = await compressImage(file);
-    pendingPhotoBlob = blob;
-    pendingPhotoRemoved = false;
-    showPhotoPreview(URL.createObjectURL(blob));
-  } catch (e) {
-    document.getElementById("logFormError").textContent = "Couldn't read that photo — try a different one.";
+function currentPhotoCount() {
+  return existingPhotos.filter(p => !removedExistingPhotos.includes(p)).length + newPhotos.length;
+}
+
+function getPhotoDisplayItems() {
+  const visibleExisting = existingPhotos.filter(p => !removedExistingPhotos.includes(p));
+  return [
+    ...visibleExisting.map(p => ({ type: "existing", path: p, url: existingPhotoUrlMap[p] || "" })),
+    ...newPhotos.map(np => ({ type: "new", np, url: np.previewUrl })),
+  ];
+}
+
+function renderPhotoThumbs() {
+  const items = getPhotoDisplayItems();
+  document.getElementById("photoThumbs").innerHTML = items.map((item, i) => `
+    <div class="photo-thumb">
+      <img src="${item.url}" alt="">
+      <button type="button" class="photo-remove" onclick="removePhotoThumb(${i})">✕</button>
+    </div>`).join("");
+  const count = items.length;
+  document.getElementById("photoAddBtn").style.display = count >= MAX_PHOTOS ? "none" : "inline-block";
+  document.getElementById("photoCountNote").textContent = count > 0 ? `${count}/${MAX_PHOTOS} photos` : "";
+}
+
+function removePhotoThumb(displayIndex) {
+  const item = getPhotoDisplayItems()[displayIndex];
+  if (!item) return;
+  if (item.type === "existing") {
+    removedExistingPhotos.push(item.path);
+  } else {
+    const idx = newPhotos.indexOf(item.np);
+    if (idx !== -1) {
+      URL.revokeObjectURL(newPhotos[idx].previewUrl);
+      newPhotos.splice(idx, 1);
+    }
   }
+  renderPhotoThumbs();
+  saveLogDraft();
 }
 
-function showPhotoPreview(url) {
-  if (photoPreviewObjectUrl) URL.revokeObjectURL(photoPreviewObjectUrl);
-  photoPreviewObjectUrl = url.indexOf("blob:") === 0 ? url : null;
-  document.getElementById("photoPreviewImg").src = url;
-  document.getElementById("photoPreviewWrap").style.display = "inline-block";
-  document.getElementById("photoAddBtn").textContent = "Replace photo";
-}
-
-function removePhoto() {
-  pendingPhotoBlob = null;
-  pendingPhotoRemoved = !!existingPhotoPath;
-  if (photoPreviewObjectUrl) { URL.revokeObjectURL(photoPreviewObjectUrl); photoPreviewObjectUrl = null; }
-  document.getElementById("photoPreviewImg").src = "";
-  document.getElementById("photoPreviewWrap").style.display = "none";
-  document.getElementById("photoAddBtn").textContent = "+ Add photo";
+async function handlePhotoSelect(event) {
+  const files = Array.from(event.target.files || []);
+  event.target.value = "";
+  if (!files.length) return;
+  document.getElementById("logFormError").textContent = "";
+  const remaining = MAX_PHOTOS - currentPhotoCount();
+  if (remaining <= 0) {
+    document.getElementById("logFormError").textContent = `Max ${MAX_PHOTOS} photos per entry.`;
+    return;
+  }
+  const toAdd = files.slice(0, remaining);
+  if (files.length > toAdd.length) {
+    document.getElementById("logFormError").textContent = `Only added ${toAdd.length} — max ${MAX_PHOTOS} photos per entry.`;
+  }
+  for (const file of toAdd) {
+    try {
+      const blob = await compressImage(file);
+      newPhotos.push({ blob, previewUrl: URL.createObjectURL(blob), uploadedPath: null });
+    } catch (e) {
+      // skip this one, keep going with the rest
+    }
+  }
+  renderPhotoThumbs();
+  saveLogDraft();
 }
 
 function resetPhotoFormState() {
-  pendingPhotoBlob = null;
-  pendingPhotoRemoved = false;
-  existingPhotoPath = null;
-  if (photoPreviewObjectUrl) { URL.revokeObjectURL(photoPreviewObjectUrl); photoPreviewObjectUrl = null; }
-  document.getElementById("photoPreviewImg").src = "";
-  document.getElementById("photoPreviewWrap").style.display = "none";
-  document.getElementById("photoAddBtn").textContent = "+ Add photo";
+  newPhotos.forEach(np => URL.revokeObjectURL(np.previewUrl));
+  newPhotos = [];
+  existingPhotos = [];
+  removedExistingPhotos = [];
+  existingPhotoUrlMap = {};
   document.getElementById("lPhotoInput").value = "";
+  renderPhotoThumbs();
 }
 
 function boot() {
@@ -692,10 +729,14 @@ function editLog(id) {
   document.getElementById("lText").value = l.text;
   document.getElementById("logSaveBtn").textContent = "Update";
   resetPhotoFormState();
+  existingPhotos = (l.photoPaths || []).slice();
+  renderPhotoThumbs();
   toggleLogForm(true);
-  if (l.photoPath) {
-    existingPhotoPath = l.photoPath;
-    getPhotoUrl(l.photoPath).then(url => { if (url) showPhotoPreview(url); });
+  if (existingPhotos.length) {
+    Promise.all(existingPhotos.map(async p => [p, await getPhotoUrl(p)])).then(pairs => {
+      existingPhotoUrlMap = Object.fromEntries(pairs);
+      renderPhotoThumbs();
+    });
   }
 }
 
@@ -767,29 +808,33 @@ async function saveLog() {
   const btn = document.getElementById("logSaveBtn");
   const targetId = editingLogId;
   const newId = uid();
-  const oldPhotoPath = existingPhotoPath;
+  const toDeleteFromStorage = removedExistingPhotos.slice();
 
-  // undefined = leave photoPath untouched; null = remove it; string = new path
-  let photoPathUpdate;
-  if (pendingPhotoBlob) {
-    btn.disabled = true; btn.textContent = "Uploading photo…";
-    const uploadedPath = await uploadPhoto(pendingPhotoBlob);
-    if (!uploadedPath) {
-      btn.disabled = false; btn.textContent = targetId ? "Update" : "Save entry";
-      document.getElementById("logFormError").textContent = "Photo didn't upload — try again (your text is still here).";
-      return;
+  const pendingUploads = newPhotos.filter(np => !np.uploadedPath);
+  if (pendingUploads.length) {
+    btn.disabled = true; btn.textContent = "Uploading photos…";
+    for (const np of pendingUploads) {
+      const path = await uploadPhoto(np.blob);
+      if (!path) {
+        btn.disabled = false; btn.textContent = targetId ? "Update" : "Save entry";
+        document.getElementById("logFormError").textContent = "A photo didn't upload — try saving again (already-uploaded photos and your text are still here).";
+        return;
+      }
+      np.uploadedPath = path;
     }
-    photoPathUpdate = uploadedPath;
-  } else if (pendingPhotoRemoved) {
-    photoPathUpdate = null;
   }
+
+  const finalPhotoPaths = existingPhotos.filter(p => !removedExistingPhotos.includes(p)).concat(newPhotos.map(np => np.uploadedPath));
+  const photosChanged = targetId
+    ? JSON.stringify(finalPhotoPaths) !== JSON.stringify(existingPhotos)
+    : finalPhotoPaths.length > 0;
 
   const fields = {
     date: document.getElementById("lDate").value || todayISO(),
     location: document.getElementById("lLocation").value.trim(),
     tag: currentTag,
     text,
-    ...(photoPathUpdate !== undefined ? { photoPath: photoPathUpdate } : {}),
+    ...(photosChanged ? { photoPaths: finalPhotoPaths } : {}),
   };
   const computeNext = (base) => {
     let newLogEntries;
@@ -804,18 +849,16 @@ async function saveLog() {
   const ok = await persist(computeNext);
   btn.disabled = false;
   if (!ok) { document.getElementById("logFormError").textContent = "Didn't save — try again, your text is still here."; btn.textContent = editingLogId ? "Update" : "Save entry"; return; }
-  if (oldPhotoPath && photoPathUpdate !== undefined && oldPhotoPath !== photoPathUpdate) {
-    deletePhoto(oldPhotoPath);
-  }
+  toDeleteFromStorage.forEach(p => deletePhoto(p));
   toggleLogForm(false);
   renderLog();
 }
 
 async function removeLog(id) {
   const entry = data.logEntries.find(l => l.id === id);
-  const photoPath = entry && entry.photoPath;
+  const photosToRemove = (entry && entry.photoPaths) || [];
   if (await persist(base => ({ ...base, logEntries: base.logEntries.filter(l => l.id !== id) }))) {
-    if (photoPath) deletePhoto(photoPath);
+    photosToRemove.forEach(p => deletePhoto(p));
     renderLog();
   }
 }
@@ -829,18 +872,21 @@ async function renderLog() {
   const el = document.getElementById("logList");
   if (data.logEntries.length === 0) { el.innerHTML = '<div class="empty">Nothing logged yet. One line a day is enough.</div>'; return; }
   const sorted = [...data.logEntries].sort((a, b) => b.date.localeCompare(a.date));
-  const photoPaths = [...new Set(sorted.filter(l => l.photoPath).map(l => l.photoPath))];
-  const urlPairs = await Promise.all(photoPaths.map(async p => [p, await getPhotoUrl(p)]));
+  const allPaths = [...new Set(sorted.flatMap(l => l.photoPaths || []))];
+  const urlPairs = await Promise.all(allPaths.map(async p => [p, await getPhotoUrl(p)]));
   const urlMap = Object.fromEntries(urlPairs);
   el.innerHTML = sorted.map(l => {
-    const photoUrl = l.photoPath ? urlMap[l.photoPath] : null;
+    const paths = l.photoPaths || [];
+    const gallery = paths.length
+      ? `<div class="log-photo-gallery">${paths.map(p => urlMap[p] ? `<img class="log-photo" src="${urlMap[p]}" alt="" onclick="event.stopPropagation(); window.open('${urlMap[p]}','_blank')">` : '').join("")}</div>`
+      : '';
     return `
     <div class="log-row card-tap" onclick="editLog('${l.id}')">
       <div class="log-date">${l.date.slice(5)}</div>
       <div class="log-body">
         <div><span class="log-tag">${l.tag}</span>${l.location ? `<span class="log-loc">${escapeHtml(l.location)}</span>` : ''}</div>
         <div class="log-text">${escapeHtml(l.text)}</div>
-        ${photoUrl ? `<img class="log-photo" src="${photoUrl}" alt="" onclick="event.stopPropagation(); window.open('${photoUrl}','_blank')">` : ''}
+        ${gallery}
       </div>
       <button class="remove-btn" onclick="event.stopPropagation(); removeLog('${l.id}')">✕</button>
     </div>`;
