@@ -98,6 +98,13 @@
 
   .footer-note { margin-top:40px; text-align:center; font-size:10px; color:#4A544D; font-family:'IBM Plex Mono',monospace; }
 
+  .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.55); display:none; align-items:center; justify-content:center; z-index:1000; padding:20px; }
+  .modal-box { background:var(--paper); padding:20px; max-width:320px; width:100%; display:flex; flex-direction:column; gap:14px; }
+  .modal-msg { font-size:14px; color:var(--ink); font-family:'IBM Plex Sans',sans-serif; line-height:1.4; }
+  .modal-actions { display:flex; flex-direction:column; gap:8px; }
+  .modal-actions .save-btn, .modal-actions .icon-btn { width:100%; text-align:center; }
+  .modal-actions .keep-btn { background:none; border:none; color:#6B5F45; font-family:'IBM Plex Mono',monospace; font-size:12px; text-decoration:underline; cursor:pointer; padding:4px; }
+
   /* Auth screen */
   .auth-wrap { max-width:360px; margin:15vh auto 0; padding:0 20px; }
   .auth-box { background:var(--paper); padding:24px; display:flex; flex-direction:column; gap:10px; }
@@ -132,6 +139,16 @@
 </div>
 
 <div id="appScreen" style="display:none">
+  <div id="unsavedModal" class="modal-overlay">
+    <div class="modal-box">
+      <div class="modal-msg" id="unsavedModalMsg"></div>
+      <div class="modal-actions">
+        <button class="save-btn" id="unsavedSaveBtn">Save</button>
+        <button class="icon-btn cancel" id="unsavedDiscardBtn">Discard</button>
+        <button class="keep-btn" id="unsavedKeepBtn">Keep editing</button>
+      </div>
+    </div>
+  </div>
   <div class="wrap">
     <div class="header">
       <div>
@@ -165,7 +182,7 @@
         <div class="search-box">
           <input id="searchInput" placeholder="Search name, place, notes" oninput="renderPeople()">
         </div>
-        <button class="icon-btn" id="personFormToggle" onclick="togglePersonForm()">+</button>
+        <button class="icon-btn" id="personFormToggle" onclick="cancelPersonForm()">+</button>
       </div>
       <div class="form-box" id="personForm" style="display:none">
         <input id="pName" placeholder="Name">
@@ -185,7 +202,7 @@
 
     <div id="logTab" style="display:none">
       <div class="search-row" style="justify-content:flex-end">
-        <button class="icon-btn" id="logFormToggle" onclick="toggleLogForm()">+ New entry</button>
+        <button class="icon-btn" id="logFormToggle" onclick="cancelLogForm()">+ New entry</button>
       </div>
       <div class="form-box" id="logForm" style="display:none">
         <div class="date-loc-row">
@@ -681,7 +698,49 @@ function togglePersonForm(forceOpen) {
   }
 }
 
-function editPerson(id) {
+// ---- Unsaved-change guards: prevent tapping a different card/entry (or
+// hitting Cancel) from silently discarding text you're mid-typing. This is
+// distinct from the draft-autosave system above — that protects against the
+// app closing unexpectedly; this protects against an accidental tap while
+// the app is open and the form is still visible.
+function hasUnsavedPersonChanges() {
+  const f = document.getElementById("personForm");
+  if (!f || f.style.display === "none") return false;
+  const name = document.getElementById("pName").value.trim();
+  const where = document.getElementById("pWhere").value.trim();
+  const notes = document.getElementById("pNotes").value.trim();
+  const gotNumber = document.getElementById("pGotNumber").checked;
+  const followUpRequired = document.getElementById("pFollowRequired").checked;
+  const followedUp = document.getElementById("pFollowedUp").checked;
+  if (!editingPersonId) {
+    return !!name || !!where || !!notes || gotNumber || followUpRequired || followedUp;
+  }
+  const p = data.people.find(x => x.id === editingPersonId);
+  if (!p) return !!name;
+  return name !== (p.name || "") || where !== (p.where || "") || notes !== (p.notes || "")
+    || gotNumber !== !!p.gotNumber || followUpRequired !== !!p.followUpRequired || followedUp !== !!p.followedUp;
+}
+async function cancelPersonForm() {
+  if (hasUnsavedPersonChanges()) {
+    const choice = await showUnsavedChoice("You have an unsaved contact. What would you like to do?");
+    if (choice === "keep") return;
+    if (choice === "save") { await savePerson(); return; }
+    // "discard" falls through — togglePersonForm() below closes and clears the draft.
+  }
+  togglePersonForm();
+}
+
+async function editPerson(id) {
+  if ((editingPersonId || null) !== id && hasUnsavedPersonChanges()) {
+    const choice = await showUnsavedChoice("You have an unsaved contact in progress. What would you like to do before opening this one?");
+    if (choice === "keep") return;
+    if (choice === "save") {
+      const saved = await savePerson();
+      if (!saved) return;
+    } else if (choice === "discard") {
+      clearPersonDraft();
+    }
+  }
   const p = data.people.find(x => x.id === id);
   if (!p) return;
   editingPersonId = id;
@@ -718,7 +777,69 @@ function toggleLogForm(forceOpen) {
   }
 }
 
-function editLog(id) {
+// Three-way "you have unsaved work" choice (Save / Discard / Keep editing),
+// used whenever something is about to overwrite or close a form that still
+// has un-persisted changes in it — e.g. tapping a different entry, or
+// hitting Cancel. Resolves to "save", "discard", or "keep".
+function showUnsavedChoice(message) {
+  return new Promise(resolve => {
+    const overlay = document.getElementById("unsavedModal");
+    document.getElementById("unsavedModalMsg").textContent = message;
+    const saveBtn = document.getElementById("unsavedSaveBtn");
+    const discardBtn = document.getElementById("unsavedDiscardBtn");
+    const keepBtn = document.getElementById("unsavedKeepBtn");
+    const done = (choice) => {
+      overlay.style.display = "none";
+      saveBtn.removeEventListener("click", onSave);
+      discardBtn.removeEventListener("click", onDiscard);
+      keepBtn.removeEventListener("click", onKeep);
+      resolve(choice);
+    };
+    const onSave = () => done("save");
+    const onDiscard = () => done("discard");
+    const onKeep = () => done("keep");
+    saveBtn.addEventListener("click", onSave);
+    discardBtn.addEventListener("click", onDiscard);
+    keepBtn.addEventListener("click", onKeep);
+    overlay.style.display = "flex";
+  });
+}
+
+function hasUnsavedLogChanges() {
+  const f = document.getElementById("logForm");
+  if (!f || f.style.display === "none") return false;
+  const text = document.getElementById("lText").value.trim();
+  const location = document.getElementById("lLocation").value.trim();
+  const date = document.getElementById("lDate").value;
+  if (!editingLogId) {
+    return !!text || newPhotos.length > 0;
+  }
+  const l = data.logEntries.find(x => x.id === editingLogId);
+  if (!l) return !!text;
+  return text !== (l.text || "") || location !== (l.location || "") || date !== l.date || currentTag !== l.tag
+    || newPhotos.length > 0 || removedExistingPhotos.length > 0;
+}
+async function cancelLogForm() {
+  if (hasUnsavedLogChanges()) {
+    const choice = await showUnsavedChoice("You have an unsaved entry. What would you like to do?");
+    if (choice === "keep") return;
+    if (choice === "save") { await saveLog(); return; }
+    // "discard" falls through — toggleLogForm() below closes and clears the draft.
+  }
+  toggleLogForm();
+}
+
+async function editLog(id) {
+  if ((editingLogId || null) !== id && hasUnsavedLogChanges()) {
+    const choice = await showUnsavedChoice("You have an unsaved entry in progress. What would you like to do before opening this one?");
+    if (choice === "keep") return;
+    if (choice === "save") {
+      const saved = await saveLog();
+      if (!saved) return;
+    } else if (choice === "discard") {
+      clearLogDraft();
+    }
+  }
   const l = data.logEntries.find(x => x.id === id);
   if (!l) return;
   editingLogId = id;
@@ -742,7 +863,10 @@ function editLog(id) {
 
 async function savePerson() {
   const name = document.getElementById("pName").value.trim();
-  if (!name) return;
+  if (!name) {
+    document.getElementById("personFormError").textContent = "Name can't be empty.";
+    return false;
+  }
   const btn = document.getElementById("personSaveBtn");
   const fields = {
     name,
@@ -766,9 +890,10 @@ async function savePerson() {
   btn.disabled = true; btn.textContent = editingPersonId ? "Saving…" : "Saving…";
   const ok = await persist(computeNext);
   btn.disabled = false;
-  if (!ok) { document.getElementById("personFormError").textContent = "Didn't save — try again, your text is still here."; btn.textContent = editingPersonId ? "Update" : "Save"; return; }
+  if (!ok) { document.getElementById("personFormError").textContent = "Didn't save — try again, your text is still here."; btn.textContent = editingPersonId ? "Update" : "Save"; return false; }
   togglePersonForm(false);
   renderPeople();
+  return true;
 }
 
 async function removePerson(id) {
@@ -804,7 +929,10 @@ function renderPeople() {
 
 async function saveLog() {
   const text = document.getElementById("lText").value.trim();
-  if (!text) return;
+  if (!text) {
+    document.getElementById("logFormError").textContent = "Entry can't be empty.";
+    return false;
+  }
   const btn = document.getElementById("logSaveBtn");
   const targetId = editingLogId;
   const newId = uid();
@@ -818,7 +946,7 @@ async function saveLog() {
       if (!path) {
         btn.disabled = false; btn.textContent = targetId ? "Update" : "Save entry";
         document.getElementById("logFormError").textContent = "A photo didn't upload — try saving again (already-uploaded photos and your text are still here).";
-        return;
+        return false;
       }
       np.uploadedPath = path;
     }
@@ -848,10 +976,11 @@ async function saveLog() {
   btn.disabled = true; btn.textContent = "Saving…";
   const ok = await persist(computeNext);
   btn.disabled = false;
-  if (!ok) { document.getElementById("logFormError").textContent = "Didn't save — try again, your text is still here."; btn.textContent = editingLogId ? "Update" : "Save entry"; return; }
+  if (!ok) { document.getElementById("logFormError").textContent = "Didn't save — try again, your text is still here."; btn.textContent = editingLogId ? "Update" : "Save entry"; return false; }
   toDeleteFromStorage.forEach(p => deletePhoto(p));
   toggleLogForm(false);
   renderLog();
+  return true;
 }
 
 async function removeLog(id) {
