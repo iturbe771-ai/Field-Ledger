@@ -303,7 +303,7 @@ function clearLogDraft() {
   clearTimeout(logDraftServerTimer);
   persist(base => ({ ...base, draftLog: null }));
 }
-function maybeRestoreLogDraft() {
+async function maybeRestoreLogDraft() {
   let localDraft = null;
   try {
     const raw = localStorage.getItem(LOG_DRAFT_KEY);
@@ -316,17 +316,25 @@ function maybeRestoreLogDraft() {
   if (!draft) return;
   if (!draft.text || !draft.text.trim()) return;
   if (draft.text === document.getElementById("lText").value) return;
+  // If a saved entry already contains this draft's text, the draft is just
+  // a stale leftover from before it was finished and saved — clear it
+  // quietly instead of offering to "restore" something you already have.
+  const supersededPrefix = draft.text.slice(0, 60);
+  const superseded = data.logEntries.some(l => l.text && l.text.length >= draft.text.length && l.text.startsWith(supersededPrefix));
+  if (superseded) { clearLogDraft(); return; }
   const when = new Date(draft.savedAt).toLocaleString();
   const preview = draft.text.length > 80 ? draft.text.slice(0, 80) + "…" : draft.text;
-  if (confirm(`Restore unsaved entry from ${when}?\n\n"${preview}"`)) {
+  const choice = await showDraftRestoreChoice(`There's an unsaved draft from ${when} that was never saved:\n\n"${preview}"`);
+  if (choice === "restore") {
     document.getElementById("lDate").value = draft.date || todayISO();
     document.getElementById("lLocation").value = draft.location || "";
     currentTag = draft.tag || currentTag;
     renderTagRow();
     document.getElementById("lText").value = draft.text;
-  } else {
+  } else if (choice === "discard") {
     clearLogDraft();
   }
+  // "later" — leave the current form and the stored draft both untouched.
 }
 
 function savePersonDraft() {
@@ -348,7 +356,7 @@ function clearPersonDraft() {
   clearTimeout(personDraftServerTimer);
   persist(base => ({ ...base, draftPerson: null }));
 }
-function maybeRestorePersonDraft() {
+async function maybeRestorePersonDraft() {
   let localDraft = null;
   try {
     const raw = localStorage.getItem(PERSON_DRAFT_KEY);
@@ -361,17 +369,23 @@ function maybeRestorePersonDraft() {
   if (!draft) return;
   if (!draft.name || !draft.name.trim()) return;
   if (draft.name === document.getElementById("pName").value && draft.notes === document.getElementById("pNotes").value) return;
+  // Same staleness check as the log draft: if a saved contact already
+  // matches this draft, it was finished and saved already — clear quietly.
+  const superseded = data.people.some(p => p.name === draft.name && (p.notes || "") === (draft.notes || "") && (p.where || "") === (draft.where || ""));
+  if (superseded) { clearPersonDraft(); return; }
   const when = new Date(draft.savedAt).toLocaleString();
-  if (confirm(`Restore unsaved contact from ${when}?\n\n"${draft.name}"`)) {
+  const choice = await showDraftRestoreChoice(`There's an unsaved contact from ${when} that was never saved:\n\n"${draft.name}"`);
+  if (choice === "restore") {
     document.getElementById("pName").value = draft.name || "";
     document.getElementById("pWhere").value = draft.where || "";
     document.getElementById("pNotes").value = draft.notes || "";
     document.getElementById("pGotNumber").checked = !!draft.gotNumber;
     document.getElementById("pFollowRequired").checked = !!draft.followUpRequired;
     document.getElementById("pFollowedUp").checked = !!draft.followedUp;
-  } else {
+  } else if (choice === "discard") {
     clearPersonDraft();
   }
+  // "later" — leave the current form and the stored draft both untouched.
 }
 
 // ---- Log photos: stored in a private Supabase Storage bucket
@@ -777,32 +791,53 @@ function toggleLogForm(forceOpen) {
   }
 }
 
-// Three-way "you have unsaved work" choice (Save / Discard / Keep editing),
-// used whenever something is about to overwrite or close a form that still
-// has un-persisted changes in it — e.g. tapping a different entry, or
-// hitting Cancel. Resolves to "save", "discard", or "keep".
-function showUnsavedChoice(message) {
+// One shared modal, reused for two different questions:
+//  1) "You have unsaved work in the form that's open right now" (Save /
+//     Discard / Keep editing) — fires when something is about to switch
+//     forms or close one out from under you.
+//  2) "There's an older autosaved draft available" (Restore / Discard
+//     draft / Not now) — fires when opening a form and a leftover draft
+//     from a previous session/device is sitting there.
+// These are deliberately different questions with different wording so
+// they can't be mistaken for each other.
+function showModalChoice(message, buttons) {
   return new Promise(resolve => {
     const overlay = document.getElementById("unsavedModal");
     document.getElementById("unsavedModalMsg").textContent = message;
-    const saveBtn = document.getElementById("unsavedSaveBtn");
-    const discardBtn = document.getElementById("unsavedDiscardBtn");
-    const keepBtn = document.getElementById("unsavedKeepBtn");
-    const done = (choice) => {
+    const slots = [document.getElementById("unsavedSaveBtn"), document.getElementById("unsavedDiscardBtn"), document.getElementById("unsavedKeepBtn")];
+    const handlers = [];
+    function finish(value) {
       overlay.style.display = "none";
-      saveBtn.removeEventListener("click", onSave);
-      discardBtn.removeEventListener("click", onDiscard);
-      keepBtn.removeEventListener("click", onKeep);
-      resolve(choice);
-    };
-    const onSave = () => done("save");
-    const onDiscard = () => done("discard");
-    const onKeep = () => done("keep");
-    saveBtn.addEventListener("click", onSave);
-    discardBtn.addEventListener("click", onDiscard);
-    keepBtn.addEventListener("click", onKeep);
+      slots.forEach((el, i) => { if (handlers[i]) el.removeEventListener("click", handlers[i]); });
+      resolve(value);
+    }
+    slots.forEach((el, i) => {
+      const b = buttons[i];
+      if (!b) { el.style.display = "none"; return; }
+      el.style.display = "";
+      el.className = b.cls;
+      el.textContent = b.label;
+      handlers[i] = () => finish(b.value);
+      el.addEventListener("click", handlers[i]);
+    });
     overlay.style.display = "flex";
   });
+}
+// Resolves to "save", "discard", or "keep".
+function showUnsavedChoice(message) {
+  return showModalChoice(message, [
+    { label: "Save", value: "save", cls: "save-btn" },
+    { label: "Discard", value: "discard", cls: "icon-btn cancel" },
+    { label: "Keep editing", value: "keep", cls: "keep-btn" },
+  ]);
+}
+// Resolves to "restore", "discard", or "later".
+function showDraftRestoreChoice(message) {
+  return showModalChoice(message, [
+    { label: "Restore", value: "restore", cls: "save-btn" },
+    { label: "Discard draft", value: "discard", cls: "icon-btn cancel" },
+    { label: "Not now", value: "later", cls: "keep-btn" },
+  ]);
 }
 
 function hasUnsavedLogChanges() {
