@@ -116,6 +116,9 @@
   .place-row { display:flex; justify-content:space-between; gap:8px; padding:10px 0; border-top:1px dashed var(--line); cursor:pointer; font-family:'IBM Plex Mono',monospace; font-size:13px; color:var(--paper); overflow-wrap:anywhere; }
   .place-row.active { color:var(--brass); }
   .place-count { color:var(--brass); flex-shrink:0; }
+  .venue-head { display:flex; justify-content:space-between; font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:0.06em; text-transform:uppercase; color:#8A6A2E; margin-top:12px; }
+  .venue-head + .place-person { border-top:none; }
+  .place-row small { display:block; color:var(--muted); font-size:11px; margin-top:3px; }
   .unplaced-row { font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--muted); padding:6px 0; cursor:pointer; overflow-wrap:anywhere; }
 
   .suggest-box { background:white; border:1px solid #B8AE93; margin-top:-4px; }
@@ -1048,7 +1051,7 @@ async function savePerson() {
   // save its exact coordinates; otherwise the globe falls back to looking
   // up the typed text by city.
   if (pickedGeo && pickedGeo.query === fields.where) {
-    Object.assign(fields, { geoQuery: fields.where, lat: pickedGeo.lat, lng: pickedGeo.lng, geoLabel: pickedGeo.label });
+    Object.assign(fields, { geoQuery: fields.where, geoVer: GEO_VERSION, lat: pickedGeo.lat, lng: pickedGeo.lng, geoLabel: pickedGeo.label, geoPlace: pickedGeo.place, geoVenue: pickedGeo.venue });
   }
   const targetId = editingPersonId;
   const newId = uid();
@@ -1303,53 +1306,80 @@ async function nominatimSearch(q) {
   const wait = 1100 - (Date.now() - lastGeocodeAt);
   if (wait > 0) await sleep(wait);
   lastGeocodeAt = Date.now();
-  const res = await fetch("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&accept-language=en&q=" + encodeURIComponent(q));
+  const res = await fetch("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&addressdetails=1&accept-language=en&q=" + encodeURIComponent(q));
   if (!res.ok) throw new Error("geocoder HTTP " + res.status);
   const arr = await res.json();
   if (!arr.length) return null;
-  const lat = parseFloat(arr[0].lat), lng = parseFloat(arr[0].lon);
+  const r = arr[0];
+  const lat = parseFloat(r.lat), lng = parseFloat(r.lon);
   if (!isFinite(lat) || !isFinite(lng)) return null;
-  return { lat, lng, label: arr[0].display_name };
+  return { lat, lng, label: r.display_name, category: r.category || "", address: r.address || {} };
 }
 
-// "BOP, Singapore" -> try the full text, then progressively broader parts
-// ("Singapore"), so a venue nobody has heard of still lands in the right
-// city. Parenthetical asides like "(met via Rachael)" are dropped.
+// Bump this when the way places are worked out changes, so saved lookups
+// get redone once with the new logic.
+const GEO_VERSION = 2;
+const PLACE_CATEGORIES = ["place", "boundary", "natural"];
+const CITY_KEYS = ["city", "town", "village", "municipality", "city_district", "county", "state_district", "state"];
+function firstSegment(s) { return s.split(",")[0].trim(); }
+function addressCity(a) { for (const k of CITY_KEYS) if (a[k]) return a[k]; return a.country || ""; }
+function joinPlace(city, country) {
+  if (!city) return country || "";
+  return country && city.toLowerCase() !== country.toLowerCase() ? `${city}, ${country}` : city;
+}
+
+// "BOP, Singapore": try the full text, then progressively broader parts
+// ("Singapore"). `head` is whatever got cut off the front, i.e. the venue.
+// Parenthetical asides like "(met via Rachael)" are dropped.
 function geoCandidates(where) {
   const base = where.trim();
   const clean = base.replace(/\([^)]*\)/g, "").replace(/\s+/g, " ").trim();
-  const out = [base, clean];
+  const out = [{ q: base, head: "" }];
+  if (clean && clean !== base) out.push({ q: clean, head: "" });
   const m = clean.match(/\b(?:in|at|near|from)\s+(.+)$/i);
-  if (m) out.push(m[1].trim());
-  const parts = clean.split(",").map(s => s.trim()).filter(Boolean);
-  for (let i = 1; i < parts.length; i++) out.push(parts.slice(i).join(", "));
-  return [...new Set(out.filter(Boolean))];
+  if (m) out.push({ q: m[1].trim(), head: clean.slice(0, m.index).trim() });
+  const parts = clean.split(",").map(x => x.trim()).filter(Boolean);
+  for (let i = 1; i < parts.length; i++) out.push({ q: parts.slice(i).join(", "), head: parts.slice(0, i).join(", ") });
+  const seen = new Set();
+  return out.filter(c => c.q && !seen.has(c.q) && seen.add(c.q));
 }
+
+// Returns the exact point plus WHICH PLACE it belongs to (city/area) and
+// which VENUE within it, so "BOP, Singapore" is a venue inside Singapore.
 async function geocodeWhere(where) {
-  for (const q of geoCandidates(where)) {
-    const hit = await nominatimSearch(q);
-    if (hit) return hit;
+  for (const c of geoCandidates(where)) {
+    const hit = await nominatimSearch(c.q);
+    if (!hit) continue;
+    const country = hit.address.country || "";
+    const placeLike = PLACE_CATEGORIES.includes(hit.category);
+    let city, venue;
+    if (c.head) { city = placeLike ? firstSegment(c.q) : addressCity(hit.address); venue = c.head; }
+    else if (placeLike) { city = firstSegment(c.q); venue = ""; }
+    else { city = addressCity(hit.address); venue = firstSegment(c.q); }
+    return { lat: hit.lat, lng: hit.lng, label: hit.label, place: joinPlace(city, country), venue };
   }
   return null;
 }
 
-// none = no "where" text; pending = text changed/never looked up;
-// placed = has coordinates; failed = looked up but nothing found.
+// none = no "where" text; pending = text changed / never looked up (or
+// looked up with older logic); placed = has coordinates; failed = nothing found.
 function personState(p) {
   const w = (p.where || "").trim();
   if (!w) return "none";
-  if (p.geoQuery !== p.where) return "pending";
+  if (p.geoQuery !== p.where || p.geoVer !== GEO_VERSION) return "pending";
   return (typeof p.lat === "number" && typeof p.lng === "number") ? "placed" : "failed";
 }
 
 async function runGeocoding(force) {
   if (geocodeRunning) return;
-  const todo = data.people.filter(p => (p.where || "").trim() && (force ? typeof p.lat !== "number" : p.geoQuery !== p.where));
+  const todo = data.people.filter(p => { const st = personState(p); return st === "pending" || (force && st === "failed"); });
   if (!todo.length) return;
   geocodeRunning = true;
   globeNote = "";
   const cache = {};
-  data.people.forEach(p => { if (personState(p) === "placed") cache[p.where] = { lat: p.lat, lng: p.lng, label: p.geoLabel || null }; });
+  data.people.forEach(p => {
+    if (personState(p) === "placed") cache[p.where] = { lat: p.lat, lng: p.lng, label: p.geoLabel || null, place: p.geoPlace || "", venue: p.geoVenue || "" };
+  });
   const results = {};
   try {
     for (let i = 0; i < todo.length; i++) {
@@ -1357,7 +1387,11 @@ async function runGeocoding(force) {
       setGlobeStatus(`Locating ${i + 1} of ${todo.length}: ${p.where}…`);
       if (!(p.where in cache)) cache[p.where] = await geocodeWhere(p.where);
       const hit = cache[p.where];
-      results[p.id] = { geoQuery: p.where, lat: hit ? hit.lat : null, lng: hit ? hit.lng : null, geoLabel: hit ? hit.label : null };
+      results[p.id] = {
+        geoQuery: p.where, geoVer: GEO_VERSION,
+        lat: hit ? hit.lat : null, lng: hit ? hit.lng : null,
+        geoLabel: hit ? hit.label : null, geoPlace: hit ? hit.place : null, geoVenue: hit ? hit.venue : null,
+      };
     }
   } catch (e) {
     globeNote = "Couldn't reach the map lookup service — it'll try again next time you open the globe.";
@@ -1377,16 +1411,38 @@ async function runGeocoding(force) {
   refreshGlobe();
 }
 
+function hashKey(s) {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return "p" + (h >>> 0).toString(36);
+}
+
+// One pin per PLACE (city/area), e.g. "Singapore". Venues inside it
+// ("BOP", "M Social") are listed within the place, not made places.
 function getGlobePlaces() {
   const groups = new Map();
   data.people.forEach(p => {
     if (personState(p) !== "placed") return;
-    const key = p.lat.toFixed(1) + "," + p.lng.toFixed(1);   // ~11 km buckets
-    if (!groups.has(key)) groups.set(key, { key, lat: p.lat, lng: p.lng, label: p.where.trim(), geoLabel: p.geoLabel || "", people: [] });
-    groups.get(key).people.push(p);
+    const label = (p.geoPlace || p.where || "").trim();
+    const key = hashKey(label.toLowerCase());
+    if (!groups.has(key)) groups.set(key, { key, label, people: [], latSum: 0, lngSum: 0 });
+    const g = groups.get(key);
+    g.people.push(p); g.latSum += p.lat; g.lngSum += p.lng;
   });
-  groups.forEach(g => g.people.sort((a, b) => (b.date || "").localeCompare(a.date || "")));
-  return [...groups.values()].sort((a, b) => b.people.length - a.people.length || a.label.localeCompare(b.label));
+  return [...groups.values()].map(g => {
+    g.lat = g.latSum / g.people.length;
+    g.lng = g.lngSum / g.people.length;
+    g.people.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    const vm = new Map();
+    g.people.forEach(p => {
+      const v = (p.geoVenue || "").trim();
+      const k = v.toLowerCase();
+      if (!vm.has(k)) vm.set(k, { name: v, people: [] });
+      vm.get(k).people.push(p);
+    });
+    g.venues = [...vm.values()].sort((a, b) => (a.name === "") - (b.name === "") || b.people.length - a.people.length || a.name.localeCompare(b.name));
+    return g;
+  }).sort((a, b) => b.people.length - a.people.length || a.label.localeCompare(b.label));
 }
 
 function angularDistance(lat1, lng1, lat2, lng2) {
@@ -1435,27 +1491,35 @@ function renderGlobeLists() {
 
   const panel = document.getElementById("placePanel");
   if (sel) {
+    const venueCount = sel.venues.filter(v => v.name).length;
+    const flat = sel.venues.length === 1 && !sel.venues[0].name;
     panel.style.display = "block";
     panel.innerHTML = `
       <button class="place-close" onclick="selectPlace(null)">✕</button>
       <div class="place-title">${escapeHtml(sel.label)}</div>
-      <div class="place-sub">${sel.people.length} ${sel.people.length === 1 ? "person" : "people"}${sel.geoLabel ? " · pinned at " + escapeHtml(sel.geoLabel) : ""}</div>
-      ${sel.people.map(p => `
-        <div class="place-person" onclick="openPersonFromGlobe('${p.id}')">
-          <div class="place-person-name">${escapeHtml(p.name)}</div>
-          ${p.where.trim() !== sel.label ? `<div class="place-person-notes">📍 ${escapeHtml(p.where)}</div>` : ""}
-          ${p.notes ? `<div class="place-person-notes">${escapeHtml(p.notes.length > 140 ? p.notes.slice(0, 140) + "…" : p.notes)}</div>` : ""}
-        </div>`).join("")}`;
+      <div class="place-sub">${sel.people.length} ${sel.people.length === 1 ? "person" : "people"}${venueCount ? ` · ${venueCount} ${venueCount === 1 ? "venue" : "venues"}` : ""}</div>
+      ${sel.venues.map(v => `
+        ${flat ? "" : `<div class="venue-head"><span>${escapeHtml(v.name || "No specific venue")}</span><span>${v.people.length}</span></div>`}
+        ${v.people.map(p => `
+          <div class="place-person" onclick="openPersonFromGlobe('${p.id}')">
+            <div class="place-person-name">${escapeHtml(p.name)}</div>
+            ${p.notes ? `<div class="place-person-notes">${escapeHtml(p.notes.length > 140 ? p.notes.slice(0, 140) + "…" : p.notes)}</div>` : ""}
+          </div>`).join("")}`).join("")}`;
   } else {
     panel.style.display = "none";
     panel.innerHTML = "";
   }
 
   document.getElementById("placeList").innerHTML = places.length
-    ? `<div class="globe-section-title">Places</div>` + places.map(pl => `
+    ? `<div class="globe-section-title">Places</div>` + places.map(pl => {
+        const named = pl.venues.filter(v => v.name);
+        const shown = named.slice(0, 3).map(v => `${escapeHtml(v.name)} ${v.people.length}`).join(" · ");
+        const more = named.length > 3 ? ` · +${named.length - 3} more` : "";
+        return `
         <div class="place-row ${pl.key === selectedPlaceKey ? "active" : ""}" onclick="selectPlace('${pl.key}', true)">
-          <span>${escapeHtml(pl.label)}</span><span class="place-count">${pl.people.length}</span>
-        </div>`).join("")
+          <span>${escapeHtml(pl.label)}${named.length ? `<small>${shown}${more}</small>` : ""}</span><span class="place-count">${pl.people.length}</span>
+        </div>`;
+      }).join("")
     : "";
 
   const unplaced = data.people.map(p => ({ p, s: personState(p) })).filter(x => x.s !== "placed");
@@ -1576,7 +1640,11 @@ async function photonSearch(q) {
     const kind = (pr.osm_value || "").replace(/_/g, " ");
     const detail = [kind, pr.district && pr.district !== area ? pr.district : "", area, pr.state && pr.state !== area ? pr.state : "", pr.country]
       .filter(Boolean).filter((x, i, a) => a.indexOf(x) === i).join(" · ");
-    return { label, name: name || label, detail, lat, lng };
+    // A picked city/region IS the place; anything else is a venue inside one.
+    const isPlace = pr.osm_key === "place" || pr.osm_key === "boundary";
+    const place = joinPlace(isPlace ? (name || area) : (area || name), pr.country || "");
+    const venue = isPlace ? "" : (name || "");
+    return { label, name: name || label, detail, lat, lng, place, venue };
   }).filter(it => it.label && isFinite(it.lat) && isFinite(it.lng));
 }
 
@@ -1593,7 +1661,7 @@ function pickSuggestion(i) {
   const it = suggestItems[i];
   if (!it) return;
   document.getElementById("pWhere").value = it.label;
-  pickedGeo = { query: it.label, lat: it.lat, lng: it.lng, label: it.label };
+  pickedGeo = { query: it.label, lat: it.lat, lng: it.lng, label: it.label, place: it.place, venue: it.venue };
   hideSuggest();
   savePersonDraft();
 }
