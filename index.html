@@ -98,6 +98,31 @@
 
   .footer-note { margin-top:40px; text-align:center; font-size:10px; color:#4A544D; font-family:'IBM Plex Mono',monospace; }
 
+  .globe-wrap { position:relative; height:440px; background:#0E1311; border:1px solid var(--line); overflow:hidden; }
+  #globeCanvas { width:100%; height:100%; }
+  #globeCanvas canvas { display:block; }
+  .globe-hint { position:absolute; left:10px; bottom:8px; font-size:10px; color:#6B746D; font-family:'IBM Plex Mono',monospace; pointer-events:none; }
+  .globe-status { margin:10px 0 4px; font-size:12px; color:var(--muted); font-family:'IBM Plex Mono',monospace; min-height:16px; }
+  #placePanel { position:absolute; left:8px; right:8px; bottom:8px; max-height:58%; overflow-y:auto; background:var(--paper); padding:12px 14px; }
+  .place-close { position:absolute; top:6px; right:8px; background:none; border:none; font-size:16px; cursor:pointer; color:var(--ink); opacity:0.6; }
+  .place-title { font-family:'Fraunces',serif; font-weight:600; font-size:18px; color:var(--ink); padding-right:28px; overflow-wrap:anywhere; }
+  .place-sub { font-family:'IBM Plex Mono',monospace; font-size:10px; color:#6B5F45; margin:2px 0 6px; overflow-wrap:anywhere; }
+  .place-person { padding:8px 0; border-top:1px dashed #B8AE93; cursor:pointer; }
+  .place-person-name { font-size:14px; color:var(--ink); font-weight:500; }
+  .place-person-notes { font-size:12px; color:#3A3323; margin-top:2px; overflow-wrap:anywhere; }
+  .globe-section-title { font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--muted); margin:18px 0 4px; text-transform:uppercase; letter-spacing:0.05em; display:flex; justify-content:space-between; align-items:center; }
+  .globe-btn { font-size:11px; padding:4px 10px; border:1px solid var(--line); background:transparent; color:var(--paper); cursor:pointer; font-family:'IBM Plex Mono',monospace; text-transform:none; letter-spacing:0; }
+  .place-row { display:flex; justify-content:space-between; gap:8px; padding:10px 0; border-top:1px dashed var(--line); cursor:pointer; font-family:'IBM Plex Mono',monospace; font-size:13px; color:var(--paper); overflow-wrap:anywhere; }
+  .place-row.active { color:var(--brass); }
+  .place-count { color:var(--brass); flex-shrink:0; }
+  .unplaced-row { font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--muted); padding:6px 0; cursor:pointer; overflow-wrap:anywhere; }
+
+  .suggest-box { background:white; border:1px solid #B8AE93; margin-top:-4px; }
+  .suggest-item { padding:8px 10px; cursor:pointer; border-top:1px dashed #D8CFB5; font-family:'IBM Plex Mono',monospace; font-size:13px; color:var(--ink); }
+  .suggest-item:first-child { border-top:none; }
+  .suggest-item small { display:block; color:#6B5F45; font-size:11px; margin-top:2px; overflow-wrap:anywhere; }
+  .suggest-none { padding:8px 10px; font-family:'IBM Plex Mono',monospace; font-size:11px; color:#6B5F45; }
+
   .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.55); display:none; align-items:center; justify-content:center; z-index:1000; padding:20px; }
   .modal-box { background:var(--paper); padding:20px; max-width:320px; width:100%; display:flex; flex-direction:column; gap:14px; }
   .modal-msg { font-size:14px; color:var(--ink); font-family:'IBM Plex Sans',sans-serif; line-height:1.4; }
@@ -175,6 +200,7 @@
     <div class="tabs">
       <button class="tab-btn active" id="tabPeopleBtn" onclick="switchTab('people')">People</button>
       <button class="tab-btn" id="tabLogBtn" onclick="switchTab('log')">Log</button>
+      <button class="tab-btn" id="tabGlobeBtn" onclick="switchTab('globe')">Globe</button>
     </div>
 
     <div id="peopleTab">
@@ -186,7 +212,8 @@
       </div>
       <div class="form-box" id="personForm" style="display:none">
         <input id="pName" placeholder="Name">
-        <input id="pWhere" placeholder="Where you met them">
+        <input id="pWhere" placeholder="Where you met them (type a venue or city)" autocomplete="off">
+        <div id="whereSuggest" class="suggest-box" style="display:none"></div>
         <textarea id="pNotes" rows="2" placeholder="Notes"></textarea>
         <div class="toggle-row">
           <label class="toggle-check"><input type="checkbox" id="pGotNumber"> Got number</label>
@@ -224,6 +251,17 @@
       </div>
       <div id="logList"></div>
       <div class="edit-hint">tap an entry to edit it</div>
+    </div>
+
+    <div id="globeTab" style="display:none">
+      <div class="globe-wrap">
+        <div id="globeCanvas"></div>
+        <div class="globe-hint">drag to spin · pinch to zoom · tap a pin</div>
+        <div id="placePanel" style="display:none"></div>
+      </div>
+      <div class="globe-status" id="globeStatus"></div>
+      <div id="placeList"></div>
+      <div id="unplacedList"></div>
     </div>
 
     <div class="footer-note">synced via Supabase — accessible from any device you sign into</div>
@@ -687,9 +725,15 @@ function switchTab(t) {
   document.getElementById("logTab").style.display = t === "log" ? "block" : "none";
   document.getElementById("tabPeopleBtn").classList.toggle("active", t === "people");
   document.getElementById("tabLogBtn").classList.toggle("active", t === "log");
+  document.getElementById("globeTab").style.display = t === "globe" ? "block" : "none";
+  document.getElementById("tabGlobeBtn").classList.toggle("active", t === "globe");
+  if (t === "globe") openGlobeTab();
+  else if (globeInstance) globeInstance.pauseAnimation();
 }
 
 function togglePersonForm(forceOpen) {
+  pickedGeo = null;
+  hideSuggest();
   const f = document.getElementById("personForm");
   const open = forceOpen === true ? true : f.style.display === "none";
   f.style.display = open ? "flex" : "none";
@@ -911,6 +955,12 @@ async function savePerson() {
     followUpRequired: document.getElementById("pFollowRequired").checked,
     followedUp: document.getElementById("pFollowedUp").checked,
   };
+  // If a venue was picked from the suggestions and the text still matches,
+  // save its exact coordinates; otherwise the globe falls back to looking
+  // up the typed text by city.
+  if (pickedGeo && pickedGeo.query === fields.where) {
+    Object.assign(fields, { geoQuery: fields.where, lat: pickedGeo.lat, lng: pickedGeo.lng, geoLabel: pickedGeo.label });
+  }
   const targetId = editingPersonId;
   const newId = uid();
   const computeNext = (base) => {
@@ -1121,7 +1171,356 @@ window.addEventListener("pagehide", () => {
   }
 });
 
-function renderAll() { renderPeople(); renderLog(); renderStreak(); }
+// ---- Globe view: where the people in your ledger are from.
+// Coordinates come from free geocoding (OpenStreetMap Nominatim) of each
+// contact's "where" text. That's done once per place and saved onto the
+// contact (lat / lng / geoQuery / geoLabel) so it never needs redoing. The
+// 3D library is loaded lazily the first time the Globe tab opens, so it
+// costs the journaling screens nothing on a slow connection.
+const GLOBE_LIB_URL = "https://cdn.jsdelivr.net/npm/globe.gl@2/dist/globe.gl.min.js";
+const GLOBE_IMG_URL = "https://cdn.jsdelivr.net/npm/three-globe@2/example/img/earth-blue-marble.jpg";
+const GLOBE_BUMP_URL = "https://cdn.jsdelivr.net/npm/three-globe@2/example/img/earth-topology.png";
+let globeInstance = null;
+let globeLibPromise = null;
+let selectedPlaceKey = null;
+let geocodeRunning = false;
+let lastGeocodeAt = 0;
+let globeNote = "";
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function setGlobeStatus(t) { document.getElementById("globeStatus").textContent = t; }
+
+function loadGlobeLib() {
+  if (window.Globe) return Promise.resolve();
+  if (!globeLibPromise) {
+    globeLibPromise = new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = GLOBE_LIB_URL;
+      s.onload = resolve;
+      s.onerror = () => { globeLibPromise = null; reject(new Error("globe library failed to load")); };
+      document.head.appendChild(s);
+    });
+  }
+  return globeLibPromise;
+}
+
+// Nominatim asks for at most one request per second.
+async function nominatimSearch(q) {
+  const wait = 1100 - (Date.now() - lastGeocodeAt);
+  if (wait > 0) await sleep(wait);
+  lastGeocodeAt = Date.now();
+  const res = await fetch("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&accept-language=en&q=" + encodeURIComponent(q));
+  if (!res.ok) throw new Error("geocoder HTTP " + res.status);
+  const arr = await res.json();
+  if (!arr.length) return null;
+  const lat = parseFloat(arr[0].lat), lng = parseFloat(arr[0].lon);
+  if (!isFinite(lat) || !isFinite(lng)) return null;
+  return { lat, lng, label: arr[0].display_name };
+}
+
+// "BOP, Singapore" -> try the full text, then progressively broader parts
+// ("Singapore"), so a venue nobody has heard of still lands in the right
+// city. Parenthetical asides like "(met via Rachael)" are dropped.
+function geoCandidates(where) {
+  const base = where.trim();
+  const clean = base.replace(/\([^)]*\)/g, "").replace(/\s+/g, " ").trim();
+  const out = [base, clean];
+  const m = clean.match(/\b(?:in|at|near|from)\s+(.+)$/i);
+  if (m) out.push(m[1].trim());
+  const parts = clean.split(",").map(s => s.trim()).filter(Boolean);
+  for (let i = 1; i < parts.length; i++) out.push(parts.slice(i).join(", "));
+  return [...new Set(out.filter(Boolean))];
+}
+async function geocodeWhere(where) {
+  for (const q of geoCandidates(where)) {
+    const hit = await nominatimSearch(q);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+// none = no "where" text; pending = text changed/never looked up;
+// placed = has coordinates; failed = looked up but nothing found.
+function personState(p) {
+  const w = (p.where || "").trim();
+  if (!w) return "none";
+  if (p.geoQuery !== p.where) return "pending";
+  return (typeof p.lat === "number" && typeof p.lng === "number") ? "placed" : "failed";
+}
+
+async function runGeocoding(force) {
+  if (geocodeRunning) return;
+  const todo = data.people.filter(p => (p.where || "").trim() && (force ? typeof p.lat !== "number" : p.geoQuery !== p.where));
+  if (!todo.length) return;
+  geocodeRunning = true;
+  globeNote = "";
+  const cache = {};
+  data.people.forEach(p => { if (personState(p) === "placed") cache[p.where] = { lat: p.lat, lng: p.lng, label: p.geoLabel || null }; });
+  const results = {};
+  try {
+    for (let i = 0; i < todo.length; i++) {
+      const p = todo[i];
+      setGlobeStatus(`Locating ${i + 1} of ${todo.length}: ${p.where}…`);
+      if (!(p.where in cache)) cache[p.where] = await geocodeWhere(p.where);
+      const hit = cache[p.where];
+      results[p.id] = { geoQuery: p.where, lat: hit ? hit.lat : null, lng: hit ? hit.lng : null, geoLabel: hit ? hit.label : null };
+    }
+  } catch (e) {
+    globeNote = "Couldn't reach the map lookup service — it'll try again next time you open the globe.";
+  }
+  if (Object.keys(results).length) {
+    // Merge by id onto whatever the latest data is, and only if the "where"
+    // text hasn't been edited since, so this can never clobber a real edit.
+    await persist(base => ({
+      ...base,
+      people: base.people.map(p => {
+        const r = results[p.id];
+        return (r && p.where === r.geoQuery) ? { ...p, ...r } : p;
+      }),
+    }));
+  }
+  geocodeRunning = false;
+  refreshGlobe();
+}
+
+function getGlobePlaces() {
+  const groups = new Map();
+  data.people.forEach(p => {
+    if (personState(p) !== "placed") return;
+    const key = p.lat.toFixed(1) + "," + p.lng.toFixed(1);   // ~11 km buckets
+    if (!groups.has(key)) groups.set(key, { key, lat: p.lat, lng: p.lng, label: p.where.trim(), geoLabel: p.geoLabel || "", people: [] });
+    groups.get(key).people.push(p);
+  });
+  groups.forEach(g => g.people.sort((a, b) => (b.date || "").localeCompare(a.date || "")));
+  return [...groups.values()].sort((a, b) => b.people.length - a.people.length || a.label.localeCompare(b.label));
+}
+
+function angularDistance(lat1, lng1, lat2, lng2) {
+  const r = Math.PI / 180;
+  const a = Math.sin((lat2 - lat1) * r / 2) ** 2 + Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin((lng2 - lng1) * r / 2) ** 2;
+  return 2 * Math.asin(Math.min(1, Math.sqrt(a))) / r;
+}
+
+function selectPlace(key, fromList) {
+  selectedPlaceKey = key;
+  refreshGlobe();
+  if (!key) return;
+  const pl = getGlobePlaces().find(p => p.key === key);
+  if (pl && globeInstance) {
+    globeInstance.controls().autoRotate = false;
+    globeInstance.pointOfView({ lat: pl.lat, lng: pl.lng, altitude: 1.6 }, 900);
+  }
+  if (fromList) document.querySelector(".globe-wrap").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// Pins are small and fingers are not, so a tap anywhere near a pin counts.
+function selectNearestPlace(c) {
+  if (!c) return;
+  const places = getGlobePlaces();
+  if (!places.length) return;
+  const alt = globeInstance ? (globeInstance.pointOfView().altitude || 2) : 2;
+  const threshold = Math.max(4, alt * 5);
+  let best = null, bestD = Infinity;
+  places.forEach(pl => {
+    const d = angularDistance(c.lat, c.lng, pl.lat, pl.lng);
+    if (d < bestD) { bestD = d; best = pl; }
+  });
+  if (best && bestD <= threshold) selectPlace(best.key);
+}
+
+function openPersonFromGlobe(id) {
+  switchTab("people");
+  window.scrollTo({ top: 0 });
+  editPerson(id);
+}
+
+function renderGlobeLists() {
+  const places = getGlobePlaces();
+  const sel = places.find(pl => pl.key === selectedPlaceKey) || null;
+  if (!sel) selectedPlaceKey = null;
+
+  const panel = document.getElementById("placePanel");
+  if (sel) {
+    panel.style.display = "block";
+    panel.innerHTML = `
+      <button class="place-close" onclick="selectPlace(null)">✕</button>
+      <div class="place-title">${escapeHtml(sel.label)}</div>
+      <div class="place-sub">${sel.people.length} ${sel.people.length === 1 ? "person" : "people"}${sel.geoLabel ? " · pinned at " + escapeHtml(sel.geoLabel) : ""}</div>
+      ${sel.people.map(p => `
+        <div class="place-person" onclick="openPersonFromGlobe('${p.id}')">
+          <div class="place-person-name">${escapeHtml(p.name)}</div>
+          ${p.where.trim() !== sel.label ? `<div class="place-person-notes">📍 ${escapeHtml(p.where)}</div>` : ""}
+          ${p.notes ? `<div class="place-person-notes">${escapeHtml(p.notes.length > 140 ? p.notes.slice(0, 140) + "…" : p.notes)}</div>` : ""}
+        </div>`).join("")}`;
+  } else {
+    panel.style.display = "none";
+    panel.innerHTML = "";
+  }
+
+  document.getElementById("placeList").innerHTML = places.length
+    ? `<div class="globe-section-title">Places</div>` + places.map(pl => `
+        <div class="place-row ${pl.key === selectedPlaceKey ? "active" : ""}" onclick="selectPlace('${pl.key}', true)">
+          <span>${escapeHtml(pl.label)}</span><span class="place-count">${pl.people.length}</span>
+        </div>`).join("")
+    : "";
+
+  const unplaced = data.people.map(p => ({ p, s: personState(p) })).filter(x => x.s !== "placed");
+  const anyFailed = unplaced.some(x => x.s === "failed");
+  document.getElementById("unplacedList").innerHTML = unplaced.length
+    ? `<div class="globe-section-title"><span>Not on the globe</span>${anyFailed ? `<button class="globe-btn" onclick="runGeocoding(true)">Retry lookup</button>` : ""}</div>`
+      + unplaced.map(({ p, s }) => `
+        <div class="unplaced-row" onclick="openPersonFromGlobe('${p.id}')">
+          ${escapeHtml(p.name)} — ${s === "none" ? "no 'where' filled in" : s === "pending" ? "locating…" : `couldn't find “${escapeHtml(p.where)}” — reword it (e.g. “City, Country”)`}
+        </div>`).join("")
+    : "";
+}
+
+function updateGlobeStatus() {
+  if (geocodeRunning) return;
+  let t;
+  if (data.people.length === 0) {
+    t = "No contacts yet — add people with a 'where' and they'll show up here.";
+  } else {
+    const placed = data.people.filter(p => personState(p) === "placed").length;
+    const n = getGlobePlaces().length;
+    t = `${placed} of ${data.people.length} contacts placed across ${n} ${n === 1 ? "place" : "places"}`;
+  }
+  if (globeNote) t += " · " + globeNote;
+  setGlobeStatus(t);
+}
+
+function refreshGlobe() {
+  renderGlobeLists();
+  updateGlobeStatus();
+  if (!globeInstance) return;
+  const places = getGlobePlaces();
+  const sel = places.find(p => p.key === selectedPlaceKey);
+  globeInstance.pointsData(places.slice()).ringsData(places.slice()).labelsData(sel ? [sel] : []);
+}
+
+function sizeGlobe() {
+  if (!globeInstance) return;
+  const el = document.getElementById("globeCanvas");
+  if (el.clientWidth > 0) globeInstance.width(el.clientWidth).height(el.clientHeight);
+}
+
+function initGlobe() {
+  const el = document.getElementById("globeCanvas");
+  globeInstance = Globe()(el)
+    .backgroundColor("rgba(0,0,0,0)")
+    .globeImageUrl(GLOBE_IMG_URL)
+    .bumpImageUrl(GLOBE_BUMP_URL)
+    .atmosphereColor("#9C7A3C")
+    .atmosphereAltitude(0.18)
+    .pointLat("lat").pointLng("lng")
+    .pointAltitude(d => 0.03 + Math.min(d.people.length, 10) * 0.025)
+    .pointRadius(0.6)
+    .pointColor(d => d.key === selectedPlaceKey ? "#F6DE9A" : "#D9A441")
+    .pointLabel(d => `<div style="font:12px 'IBM Plex Mono',monospace;background:#1C2321;color:#E7DFC9;padding:4px 8px;border:1px solid #9C7A3C">${escapeHtml(d.label)} · ${d.people.length}</div>`)
+    .onPointClick(d => selectPlace(d.key))
+    .onGlobeClick(c => selectNearestPlace(c))
+    .ringColor(() => t => `rgba(217,164,65,${1 - t})`)
+    .ringMaxRadius(3).ringPropagationSpeed(1.4).ringRepeatPeriod(1800)
+    .labelLat("lat").labelLng("lng").labelText(d => d.label)
+    .labelSize(1.3).labelDotRadius(0.5).labelColor(() => "#F6DE9A")
+    .labelResolution(2).labelAltitude(0.08);
+  const controls = globeInstance.controls();
+  controls.autoRotate = true;
+  controls.autoRotateSpeed = 0.5;
+  controls.addEventListener("start", () => { controls.autoRotate = false; });
+  sizeGlobe();
+  const latest = data.people.filter(p => personState(p) === "placed").sort((a, b) => (b.date || "").localeCompare(a.date || ""))[0];
+  if (latest) globeInstance.pointOfView({ lat: latest.lat, lng: latest.lng, altitude: 2.3 }, 0);
+  window.addEventListener("resize", sizeGlobe);
+}
+
+async function openGlobeTab() {
+  globeNote = "";
+  if (!globeInstance) {
+    setGlobeStatus("Loading globe…");
+    try {
+      await loadGlobeLib();
+      initGlobe();
+    } catch (e) {
+      globeNote = "Couldn't load the 3D globe (needs a connection) — the lists below still work. Reopen this tab to retry.";
+    }
+  } else {
+    globeInstance.resumeAnimation();
+    sizeGlobe();
+  }
+  refreshGlobe();
+  runGeocoding(false);
+}
+
+// ---- Venue picker for the "where" field (Photon, a free OpenStreetMap
+// search — no account or key). Swappable: only photonSearch() would change
+// if this moves to Google Places later; saved coordinates stay as they are.
+let pickedGeo = null;        // { query, lat, lng, label } for the venue just tapped
+let suggestItems = [];
+let suggestTimer = null;
+let suggestSeq = 0;
+
+function hideSuggest() {
+  clearTimeout(suggestTimer);
+  suggestSeq++;
+  const box = document.getElementById("whereSuggest");
+  box.style.display = "none";
+  box.innerHTML = "";
+}
+
+async function photonSearch(q) {
+  const res = await fetch("https://photon.komoot.io/api/?limit=5&lang=en&q=" + encodeURIComponent(q));
+  if (!res.ok) throw new Error("photon HTTP " + res.status);
+  const j = await res.json();
+  return (j.features || []).map(f => {
+    const pr = f.properties || {};
+    const [lng, lat] = f.geometry.coordinates;
+    const name = pr.name || [pr.street, pr.housenumber].filter(Boolean).join(" ");
+    const area = pr.city || pr.town || pr.village || pr.district || pr.county || pr.state || "";
+    const parts = [name, area, pr.country].filter(Boolean);
+    const label = parts.filter((x, i) => parts.indexOf(x) === i).join(", ");
+    const kind = (pr.osm_value || "").replace(/_/g, " ");
+    const detail = [kind, pr.district && pr.district !== area ? pr.district : "", area, pr.state && pr.state !== area ? pr.state : "", pr.country]
+      .filter(Boolean).filter((x, i, a) => a.indexOf(x) === i).join(" · ");
+    return { label, name: name || label, detail, lat, lng };
+  }).filter(it => it.label && isFinite(it.lat) && isFinite(it.lng));
+}
+
+function showSuggest(items) {
+  suggestItems = items;
+  const box = document.getElementById("whereSuggest");
+  box.innerHTML = items.length
+    ? items.map((it, i) => `<div class="suggest-item" onclick="pickSuggestion(${i})">${escapeHtml(it.name)}<small>${escapeHtml(it.detail)}</small></div>`).join("")
+    : `<div class="suggest-none">No matches — it'll be placed by city/country from what you typed.</div>`;
+  box.style.display = "block";
+}
+
+function pickSuggestion(i) {
+  const it = suggestItems[i];
+  if (!it) return;
+  document.getElementById("pWhere").value = it.label;
+  pickedGeo = { query: it.label, lat: it.lat, lng: it.lng, label: it.label };
+  hideSuggest();
+  savePersonDraft();
+}
+
+document.getElementById("pWhere").addEventListener("input", (e) => {
+  pickedGeo = null;
+  clearTimeout(suggestTimer);
+  const q = e.target.value.trim();
+  if (q.length < 3) { hideSuggest(); return; }
+  suggestTimer = setTimeout(async () => {
+    const seq = ++suggestSeq;
+    try {
+      const items = await photonSearch(q);
+      if (seq === suggestSeq) showSuggest(items);
+    } catch (err) {
+      if (seq === suggestSeq) hideSuggest();
+    }
+  }, 400);
+});
+
+function renderAll() { renderPeople(); renderLog(); renderStreak(); refreshGlobe(); }
 
 function escapeHtml(s) {
   const d = document.createElement("div");
