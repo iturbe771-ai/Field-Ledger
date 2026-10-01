@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#1C2321">
 <title>Field Ledger</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 fill=%22%231C2321%22/><text x=%2250%22 y=%2265%22 font-size=%2260%22 text-anchor=%22middle%22 fill=%22%239C7A3C%22>F</text></svg>">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
@@ -139,6 +140,94 @@
   .auth-toggle { text-align:center; font-size:12px; color:var(--muted); font-family:'IBM Plex Mono',monospace; cursor:pointer; text-decoration:underline; margin-top:4px; }
   .auth-error { color:var(--rust); font-size:12px; font-family:'IBM Plex Mono',monospace; }
   .auth-title { font-family:'Fraunces',serif; font-weight:600; font-size:28px; color:var(--paper); text-align:center; margin-bottom:24px; }
+
+  /* ===== Visual polish pass (appearance only; no behaviour changes) ===== */
+  :root { --card:#EDE5CF; --shadow:0 2px 10px rgba(0,0,0,0.28); --radius:12px; }
+  body { background:radial-gradient(1100px 520px at 50% -180px, #2A352F 0%, #1C2321 62%) fixed; color:var(--paper); }
+  .wrap { padding-top:max(28px, env(safe-area-inset-top)); padding-bottom:calc(32px + env(safe-area-inset-bottom)); }
+
+  .header { border-bottom:1px solid #2F3A34; position:relative; }
+  .header::after { content:""; position:absolute; left:0; bottom:-1px; width:64px; height:2px; background:var(--brass); }
+  .title { font-size:32px; letter-spacing:0.01em; }
+  .subtitle { letter-spacing:0.04em; }
+
+  .tabs { gap:8px; }
+  .tab-btn { border-radius:999px; padding:9px 20px; border-color:#34413A; transition:background .15s, color .15s, transform .1s; }
+  .tab-btn:active { transform:scale(0.97); }
+  .tab-btn.active { background:linear-gradient(135deg,#B08C47,#8A6A2E); border-color:transparent; color:#16120A; font-weight:500; box-shadow:0 2px 8px rgba(156,122,60,0.35); }
+
+  .streak-btn { border-radius:var(--radius); background:linear-gradient(135deg,#26302B,#202923); border-color:#34413A; box-shadow:var(--shadow); transition:transform .1s; }
+  .streak-btn:active { transform:scale(0.99); }
+  .streak-btn.done { background:linear-gradient(135deg,#4A7068,#3E5C56); }
+  .streak-count { border-radius:999px; padding:4px 10px; }
+
+  .search-box { border-radius:10px; background:#222B26; border-color:#34413A; }
+  .icon-btn { border-radius:10px; transition:transform .1s; }
+  .icon-btn:active { transform:scale(0.95); }
+
+  .form-box { border-radius:14px; background:var(--card); border:1px solid rgba(156,122,60,0.55); box-shadow:var(--shadow); gap:10px; }
+  .form-box input, .form-box textarea { border-radius:8px; border:1px solid #D9CFB3; padding:11px 10px; }
+  .form-box input:focus, .form-box textarea:focus { border-color:var(--brass); box-shadow:0 0 0 2px rgba(156,122,60,0.2); }
+  .save-btn { border-radius:8px; padding:11px 20px; background:linear-gradient(135deg,#2A352F,#1C2321); transition:transform .1s; }
+  .save-btn:active { transform:scale(0.97); }
+  .tag-chip { border-radius:999px; padding:6px 13px; border-width:1px; transition:background .15s; }
+  .chip-Person { border-color:#8A6A2E; } .chip-Person.active { background:#8A6A2E; }
+  .chip-Food { border-color:#B5532F; } .chip-Food.active { background:#B5532F; }
+  .chip-Culture { border-color:#6E5E9A; } .chip-Culture.active { background:#6E5E9A; }
+  .chip-Observation { border-color:#3E5C56; } .chip-Observation.active { background:#3E5C56; }
+  .photo-btn { border-radius:8px; }
+  .photo-thumb img, .log-photo { border-radius:8px; }
+  .suggest-box { border-radius:8px; overflow:hidden; box-shadow:var(--shadow); }
+
+  .person-card { background:var(--card); border-radius:var(--radius); border-top:none; box-shadow:var(--shadow); padding:16px 16px 14px; margin-bottom:12px; transition:transform .12s; }
+  .person-card:active { transform:scale(0.995); }
+  .person-card .top { align-items:center; gap:12px; }
+  .avatar { width:42px; height:42px; border-radius:50%; flex-shrink:0; display:flex; align-items:center; justify-content:center; cursor:pointer;
+    background:linear-gradient(135deg,#B08C47,#7A5D26); color:#F6EBCB; font-family:'Fraunces',serif; font-weight:600; font-size:19px; box-shadow:inset 0 0 0 2px rgba(255,255,255,0.18); }
+  .person-name { font-size:19px; }
+  .person-notes { line-height:1.5; margin-top:10px; }
+  .badge { border-radius:999px; padding:3px 10px; }
+
+  .month-head { font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:0.1em; text-transform:uppercase; color:var(--brass); margin:22px 2px 10px; display:flex; align-items:center; gap:10px; }
+  .month-head::after { content:""; flex:1; height:1px; background:#34413A; }
+  .month-head:first-child { margin-top:6px; }
+  .log-row { padding:12px 12px 12px 10px; margin-bottom:10px; gap:12px; border:1px solid rgba(255,255,255,0.06); border-left:3px solid var(--brass); border-radius:10px; background:rgba(231,223,201,0.045); transition:background .15s, transform .12s; }
+  .log-row:first-child { border-top:1px solid rgba(255,255,255,0.06); }
+  .log-row:active { background:rgba(231,223,201,0.09); transform:scale(0.995); }
+  .tagc-Person { border-left-color:#B08C47; } .tagc-Food { border-left-color:#C4663F; } .tagc-Culture { border-left-color:#8A7BBB; } .tagc-Observation { border-left-color:#4F8A7E; }
+  .log-date { width:44px; display:flex; flex-direction:column; align-items:center; padding-top:0; text-align:center; }
+  .log-date .d { font-family:'Fraunces',serif; font-weight:600; font-size:24px; line-height:1; color:var(--paper); }
+  .log-date .m { font-size:10px; letter-spacing:0.08em; text-transform:uppercase; color:var(--muted); margin-top:3px; }
+  .log-tag { border-radius:999px; padding:2px 9px; }
+  .tag-Person { background:#8A6A2E; } .tag-Food { background:#B5532F; } .tag-Culture { background:#6E5E9A; } .tag-Observation { background:#3E5C56; }
+  .log-text { line-height:1.55; margin-top:6px; }
+  .remove-btn { align-self:flex-start; }
+  .log-row .remove-btn { color:var(--paper); }
+
+  .empty { border:1px dashed #34413A; border-radius:var(--radius); margin-top:8px; }
+  .edit-hint { text-align:center; margin-top:14px; }
+  .banner { border-radius:10px; }
+
+  .globe-wrap { border-radius:16px; border-color:#2F3A34; box-shadow:var(--shadow);
+    background-color:#05080A;
+    background-image:
+      radial-gradient(1.2px 1.2px at 12% 18%, rgba(255,255,255,0.85) 50%, transparent 51%),
+      radial-gradient(1px 1px at 78% 12%, rgba(255,255,255,0.7) 50%, transparent 51%),
+      radial-gradient(1.4px 1.4px at 38% 72%, rgba(255,255,255,0.8) 50%, transparent 51%),
+      radial-gradient(1px 1px at 88% 66%, rgba(255,255,255,0.6) 50%, transparent 51%),
+      radial-gradient(1px 1px at 55% 34%, rgba(255,255,255,0.55) 50%, transparent 51%),
+      radial-gradient(1.2px 1.2px at 22% 88%, rgba(255,255,255,0.7) 50%, transparent 51%),
+      radial-gradient(ellipse at 50% 45%, #12201B 0%, #05080A 75%);
+    background-size:260px 220px, 310px 260px, 240px 300px, 330px 280px, 290px 250px, 270px 310px, 100% 100%; }
+  #placePanel { border-radius:12px; box-shadow:0 4px 18px rgba(0,0,0,0.45); }
+  .place-row { border-top:none; border-radius:10px; padding:11px 12px; margin-top:6px; background:rgba(231,223,201,0.045); border:1px solid rgba(255,255,255,0.05); }
+  .place-row.active { background:rgba(156,122,60,0.18); border-color:rgba(156,122,60,0.5); }
+  .place-count { background:var(--brass); color:#16120A; border-radius:999px; padding:0 9px; font-size:12px; line-height:20px; }
+  .globe-btn { border-radius:999px; }
+  .modal-box { border-radius:14px; box-shadow:0 8px 30px rgba(0,0,0,0.5); }
+  .modal-actions .save-btn, .modal-actions .icon-btn { border-radius:8px; padding:11px 16px; }
+  .auth-box { border-radius:14px; box-shadow:var(--shadow); }
+  .auth-box input, .auth-btn { border-radius:8px; }
 </style>
 </head>
 <body>
@@ -996,6 +1085,7 @@ function renderPeople() {
     return `
       <div class="person-card">
         <div class="top">
+          <div class="avatar" onclick="editPerson('${p.id}')">${escapeHtml((p.name || "?").trim().charAt(0).toUpperCase())}</div>
           <div class="card-tap" style="flex:1" onclick="editPerson('${p.id}')">
             <div class="person-name">${escapeHtml(p.name)}</div>
             ${p.where ? `<div class="person-where">📍 ${escapeHtml(p.where)}</div>` : ''}
@@ -1078,7 +1168,7 @@ async function removeLog(id) {
 }
 
 function renderTagRow() {
-  document.getElementById("tagRow").innerHTML = TAGS.map(t => `<button type="button" class="tag-chip ${t === currentTag ? 'active' : ''}" onclick="setTag('${t}')">${t}</button>`).join("");
+  document.getElementById("tagRow").innerHTML = TAGS.map(t => `<button type="button" class="tag-chip chip-${t} ${t === currentTag ? 'active' : ''}" onclick="setTag('${t}')">${t}</button>`).join("");
 }
 function setTag(t) { currentTag = t; renderTagRow(); saveLogDraft(); }
 
@@ -1089,16 +1179,20 @@ async function renderLog() {
   const allPaths = [...new Set(sorted.flatMap(l => l.photoPaths || []))];
   const urlPairs = await Promise.all(allPaths.map(async p => [p, await getPhotoUrl(p)]));
   const urlMap = Object.fromEntries(urlPairs);
+  let lastMonth = "";
   el.innerHTML = sorted.map(l => {
+    const monthKey = l.date.slice(0, 7);
+    const monthHead = monthKey !== lastMonth ? `<div class="month-head">${fmtMonthYear(l.date)}</div>` : "";
+    lastMonth = monthKey;
     const paths = l.photoPaths || [];
     const gallery = paths.length
       ? `<div class="log-photo-gallery">${paths.map(p => urlMap[p] ? `<img class="log-photo" src="${urlMap[p]}" alt="" onclick="event.stopPropagation(); window.open('${urlMap[p]}','_blank')">` : '').join("")}</div>`
       : '';
-    return `
-    <div class="log-row card-tap" onclick="editLog('${l.id}')">
-      <div class="log-date">${l.date.slice(5)}</div>
+    return `${monthHead}
+    <div class="log-row card-tap tagc-${l.tag}" onclick="editLog('${l.id}')">
+      <div class="log-date"><span class="d">${fmtDay(l.date)}</span><span class="m">${fmtMon(l.date)}</span></div>
       <div class="log-body">
-        <div><span class="log-tag">${l.tag}</span>${l.location ? `<span class="log-loc">${escapeHtml(l.location)}</span>` : ''}</div>
+        <div><span class="log-tag tag-${l.tag}">${l.tag}</span>${l.location ? `<span class="log-loc">${escapeHtml(l.location)}</span>` : ''}</div>
         <div class="log-text">${escapeHtml(l.text)}</div>
         ${gallery}
       </div>
@@ -1521,6 +1615,12 @@ document.getElementById("pWhere").addEventListener("input", (e) => {
 });
 
 function renderAll() { renderPeople(); renderLog(); renderStreak(); refreshGlobe(); }
+
+const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const MONTHS_FULL = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+function fmtDay(iso) { return String(parseInt(iso.slice(8, 10), 10) || ""); }
+function fmtMon(iso) { return MONTHS_SHORT[parseInt(iso.slice(5, 7), 10) - 1] || ""; }
+function fmtMonthYear(iso) { return (MONTHS_FULL[parseInt(iso.slice(5, 7), 10) - 1] || "") + " " + iso.slice(0, 4); }
 
 function escapeHtml(s) {
   const d = document.createElement("div");
