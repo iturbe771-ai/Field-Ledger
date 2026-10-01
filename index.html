@@ -118,6 +118,8 @@
   .place-count { color:var(--brass); flex-shrink:0; }
   .venue-head { display:flex; justify-content:space-between; font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:0.06em; text-transform:uppercase; color:#8A6A2E; margin-top:12px; }
   .venue-head + .place-person { border-top:none; }
+  .country-head { display:flex; justify-content:space-between; font-family:'IBM Plex Mono',monospace; font-size:12px; letter-spacing:0.08em; text-transform:uppercase; color:var(--brass); margin:18px 2px 0; }
+  .place-row.sub { margin-left:14px; }
   .place-row small { display:block; color:var(--muted); font-size:11px; margin-top:3px; }
   .unplaced-row { font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--muted); padding:6px 0; cursor:pointer; overflow-wrap:anywhere; }
 
@@ -1484,6 +1486,10 @@ function openPersonFromGlobe(id) {
   editPerson(id);
 }
 
+// place labels look like "Harare, Zimbabwe" or just "Singapore"
+function placeCountry(label) { return label.includes(", ") ? label.slice(label.lastIndexOf(", ") + 2) : label; }
+function placeCity(label) { return label.includes(", ") ? label.slice(0, label.lastIndexOf(", ")) : label; }
+
 function renderGlobeLists() {
   const places = getGlobePlaces();
   const sel = places.find(pl => pl.key === selectedPlaceKey) || null;
@@ -1510,15 +1516,34 @@ function renderGlobeLists() {
     panel.innerHTML = "";
   }
 
-  document.getElementById("placeList").innerHTML = places.length
-    ? `<div class="globe-section-title">Places</div>` + places.map(pl => {
-        const named = pl.venues.filter(v => v.name);
-        const shown = named.slice(0, 3).map(v => `${escapeHtml(v.name)} ${v.people.length}`).join(" · ");
-        const more = named.length > 3 ? ` · +${named.length - 3} more` : "";
-        return `
-        <div class="place-row ${pl.key === selectedPlaceKey ? "active" : ""}" onclick="selectPlace('${pl.key}', true)">
-          <span>${escapeHtml(pl.label)}${named.length ? `<small>${shown}${more}</small>` : ""}</span><span class="place-count">${pl.people.length}</span>
-        </div>`;
+  // Group the places list by COUNTRY (Zimbabwe 10 -> Harare 5, Victoria
+  // Falls 3, Chinoyi 2). A country with a single place is just one row.
+  const byCountry = new Map();
+  places.forEach(pl => {
+    const country = placeCountry(pl.label);
+    if (!byCountry.has(country)) byCountry.set(country, { country, places: [], total: 0 });
+    const c = byCountry.get(country);
+    c.places.push(pl);
+    c.total += pl.people.length;
+  });
+  const countries = [...byCountry.values()].sort((a, b) => b.total - a.total || a.country.localeCompare(b.country));
+  const rowHtml = (pl, label, sub) => {
+    const named = pl.venues.filter(v => v.name);
+    const shown = named.slice(0, 3).map(v => `${escapeHtml(v.name)} ${v.people.length}`).join(" · ");
+    const more = named.length > 3 ? ` · +${named.length - 3} more` : "";
+    return `
+      <div class="place-row ${sub ? "sub" : ""} ${pl.key === selectedPlaceKey ? "active" : ""}" onclick="selectPlace('${pl.key}', true)">
+        <span>${escapeHtml(label)}${named.length ? `<small>${shown}${more}</small>` : ""}</span><span class="place-count">${pl.people.length}</span>
+      </div>`;
+  };
+  document.getElementById("placeList").innerHTML = countries.length
+    ? `<div class="globe-section-title">Places</div>` + countries.map(c => {
+        if (c.places.length === 1) {
+          const pl = c.places[0];
+          return rowHtml(pl, placeCity(pl.label).toLowerCase() === c.country.toLowerCase() ? c.country : pl.label, false);
+        }
+        return `<div class="country-head"><span>${escapeHtml(c.country)}</span><span>${c.total}</span></div>`
+          + c.places.map(pl => rowHtml(pl, placeCity(pl.label), true)).join("");
       }).join("")
     : "";
 
@@ -1540,8 +1565,9 @@ function updateGlobeStatus() {
     t = "No contacts yet — add people with a 'where' and they'll show up here.";
   } else {
     const placed = data.people.filter(p => personState(p) === "placed").length;
-    const n = getGlobePlaces().length;
-    t = `${placed} of ${data.people.length} contacts placed across ${n} ${n === 1 ? "place" : "places"}`;
+    const pls = getGlobePlaces();
+    const n = new Set(pls.map(pl => placeCountry(pl.label).toLowerCase())).size;
+    t = `${placed} of ${data.people.length} contacts placed across ${n} ${n === 1 ? "country" : "countries"}`;
   }
   if (globeNote) t += " · " + globeNote;
   setGlobeStatus(t);
