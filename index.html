@@ -328,8 +328,9 @@
       <div class="form-box" id="logForm" style="display:none">
         <div class="date-loc-row">
           <input type="date" id="lDate">
-          <input type="text" id="lLocation" placeholder="Where">
+          <input type="text" id="lLocation" placeholder="Where (type a venue or city)" autocomplete="off">
         </div>
+        <div id="logWhereSuggest" class="suggest-box" style="display:none"></div>
         <div class="tag-row" id="tagRow"></div>
         <textarea id="lText" rows="3" placeholder="What was different today"></textarea>
         <div class="photo-row">
@@ -826,8 +827,7 @@ function switchTab(t) {
 }
 
 function togglePersonForm(forceOpen) {
-  pickedGeo = null;
-  hideSuggest();
+  personPicker.reset();
   const f = document.getElementById("personForm");
   const open = forceOpen === true ? true : f.style.display === "none";
   f.style.display = open ? "flex" : "none";
@@ -907,6 +907,7 @@ async function editPerson(id) {
 }
 
 function toggleLogForm(forceOpen) {
+  logPicker.reset();
   const f = document.getElementById("logForm");
   const open = forceOpen === true ? true : f.style.display === "none";
   f.style.display = open ? "flex" : "none";
@@ -1052,8 +1053,9 @@ async function savePerson() {
   // If a venue was picked from the suggestions and the text still matches,
   // save its exact coordinates; otherwise the globe falls back to looking
   // up the typed text by city.
-  if (pickedGeo && pickedGeo.query === fields.where) {
-    Object.assign(fields, { geoQuery: fields.where, geoVer: GEO_VERSION, lat: pickedGeo.lat, lng: pickedGeo.lng, geoLabel: pickedGeo.label, geoPlace: pickedGeo.place, geoVenue: pickedGeo.venue });
+  const pg = personPicker.picked;
+  if (pg && pg.query === fields.where) {
+    Object.assign(fields, { geoQuery: fields.where, geoVer: GEO_VERSION, lat: pg.lat, lng: pg.lng, geoLabel: pg.label, geoPlace: pg.place, geoVenue: pg.venue });
   }
   const targetId = editingPersonId;
   const newId = uid();
@@ -1144,10 +1146,21 @@ async function saveLog() {
     text,
     ...(photosChanged ? { photoPaths: finalPhotoPaths } : {}),
   };
+  // Picked place: saved on the entry (shown on the globe? no — People only).
+  const lg = logPicker.picked;
+  if (lg && lg.query === fields.location) {
+    Object.assign(fields, { geoQuery: fields.location, lat: lg.lat, lng: lg.lng, geoPlace: lg.place, geoVenue: lg.venue });
+  }
   const computeNext = (base) => {
     let newLogEntries;
     if (targetId) {
-      newLogEntries = base.logEntries.map(l => l.id === targetId ? { ...l, ...fields } : l);
+      newLogEntries = base.logEntries.map(l => {
+        if (l.id !== targetId) return l;
+        const m = { ...l, ...fields };
+        // location text changed without picking a new place: drop the stale pin
+        if (m.geoQuery && m.geoQuery !== m.location) { m.geoQuery = null; m.lat = null; m.lng = null; m.geoPlace = null; m.geoVenue = null; }
+        return m;
+      });
     } else {
       newLogEntries = [{ id: newId, ...fields }, ...base.logEntries];
     }
@@ -1537,14 +1550,10 @@ function renderGlobeLists() {
       </div>`;
   };
   document.getElementById("placeList").innerHTML = countries.length
-    ? `<div class="globe-section-title">Places</div>` + countries.map(c => {
-        if (c.places.length === 1) {
-          const pl = c.places[0];
-          return rowHtml(pl, placeCity(pl.label).toLowerCase() === c.country.toLowerCase() ? c.country : pl.label, false);
-        }
-        return `<div class="country-head"><span>${escapeHtml(c.country)}</span><span>${c.total}</span></div>`
-          + c.places.map(pl => rowHtml(pl, placeCity(pl.label), true)).join("");
-      }).join("")
+    ? `<div class="globe-section-title">Places</div>` + countries.map(c =>
+        `<div class="country-head"><span>${escapeHtml(c.country)}</span><span>${c.total}</span></div>`
+        + c.places.map(pl => rowHtml(pl, placeCity(pl.label), true)).join("")
+      ).join("")
     : "";
 
   const unplaced = data.people.map(p => ({ p, s: personState(p) })).filter(x => x.s !== "placed");
@@ -1636,22 +1645,9 @@ async function openGlobeTab() {
   runGeocoding(false);
 }
 
-// ---- Venue picker for the "where" field (Photon, a free OpenStreetMap
-// search — no account or key). Swappable: only photonSearch() would change
-// if this moves to Google Places later; saved coordinates stay as they are.
-let pickedGeo = null;        // { query, lat, lng, label } for the venue just tapped
-let suggestItems = [];
-let suggestTimer = null;
-let suggestSeq = 0;
-
-function hideSuggest() {
-  clearTimeout(suggestTimer);
-  suggestSeq++;
-  const box = document.getElementById("whereSuggest");
-  box.style.display = "none";
-  box.innerHTML = "";
-}
-
+// ---- Place picker (Photon, a free OpenStreetMap search — no account or
+// key). Used on the People "where" field and the Log "where" field. Swappable:
+// only photonSearch() would change if this moves to Google Places later.
 async function photonSearch(q) {
   const res = await fetch("https://photon.komoot.io/api/?limit=5&lang=en&q=" + encodeURIComponent(q));
   if (!res.ok) throw new Error("photon HTTP " + res.status);
@@ -1674,39 +1670,49 @@ async function photonSearch(q) {
   }).filter(it => it.label && isFinite(it.lat) && isFinite(it.lng));
 }
 
-function showSuggest(items) {
-  suggestItems = items;
-  const box = document.getElementById("whereSuggest");
-  box.innerHTML = items.length
-    ? items.map((it, i) => `<div class="suggest-item" onclick="pickSuggestion(${i})">${escapeHtml(it.name)}<small>${escapeHtml(it.detail)}</small></div>`).join("")
-    : `<div class="suggest-none">No matches — it'll be placed by city/country from what you typed.</div>`;
-  box.style.display = "block";
-}
 
-function pickSuggestion(i) {
-  const it = suggestItems[i];
-  if (!it) return;
-  document.getElementById("pWhere").value = it.label;
-  pickedGeo = { query: it.label, lat: it.lat, lng: it.lng, label: it.label, place: it.place, venue: it.venue };
-  hideSuggest();
-  savePersonDraft();
+const placePickers = {};
+function makePlacePicker(key, inputId, boxId, afterPick) {
+  const st = { picked: null, items: [], timer: null, seq: 0 };
+  const input = document.getElementById(inputId);
+  const box = document.getElementById(boxId);
+  st.hide = () => { clearTimeout(st.timer); st.seq++; box.style.display = "none"; box.innerHTML = ""; };
+  st.reset = () => { st.picked = null; st.hide(); };
+  st.show = (items) => {
+    st.items = items;
+    box.innerHTML = items.length
+      ? items.map((it, i) => `<div class="suggest-item" onclick="placePickers['${key}'].pick(${i})">${escapeHtml(it.name)}<small>${escapeHtml(it.detail)}</small></div>`).join("")
+      : `<div class="suggest-none">No matches — it'll be placed by city/country from what you typed.</div>`;
+    box.style.display = "block";
+  };
+  st.pick = (i) => {
+    const it = st.items[i];
+    if (!it) return;
+    input.value = it.label;
+    st.picked = { query: it.label, lat: it.lat, lng: it.lng, label: it.label, place: it.place, venue: it.venue };
+    st.hide();
+    afterPick();
+  };
+  input.addEventListener("input", (e) => {
+    st.picked = null;
+    clearTimeout(st.timer);
+    const q = e.target.value.trim();
+    if (q.length < 3) { st.hide(); return; }
+    st.timer = setTimeout(async () => {
+      const seq = ++st.seq;
+      try {
+        const items = await photonSearch(q);
+        if (seq === st.seq) st.show(items);
+      } catch (err) {
+        if (seq === st.seq) st.hide();
+      }
+    }, 400);
+  });
+  placePickers[key] = st;
+  return st;
 }
-
-document.getElementById("pWhere").addEventListener("input", (e) => {
-  pickedGeo = null;
-  clearTimeout(suggestTimer);
-  const q = e.target.value.trim();
-  if (q.length < 3) { hideSuggest(); return; }
-  suggestTimer = setTimeout(async () => {
-    const seq = ++suggestSeq;
-    try {
-      const items = await photonSearch(q);
-      if (seq === suggestSeq) showSuggest(items);
-    } catch (err) {
-      if (seq === suggestSeq) hideSuggest();
-    }
-  }, 400);
-});
+const personPicker = makePlacePicker("person", "pWhere", "whereSuggest", () => savePersonDraft());
+const logPicker = makePlacePicker("log", "lLocation", "logWhereSuggest", () => saveLogDraft());
 
 function renderAll() { renderPeople(); renderLog(); renderStreak(); refreshGlobe(); }
 
